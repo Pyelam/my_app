@@ -6,17 +6,7 @@ struct MyApp: App {
     private let storage: Result<ModelContainer, Error>
 
     init() {
-        storage = Result {
-            // Persist on this device. Enable iCloud in a later development step.
-            let configuration = ModelConfiguration(
-                isStoredInMemoryOnly: false,
-                cloudKitDatabase: .none
-            )
-            return try ModelContainer(
-                for: InspirationFolder.self,
-                configurations: configuration
-            )
-        }
+        storage = Result { try StorageConfiguration.makeContainer() }
     }
 
     var body: some Scene {
