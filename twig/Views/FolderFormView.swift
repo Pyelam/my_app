@@ -5,6 +5,7 @@ struct FolderFormView: View {
     let folder: InspirationFolder?
     let store: NoteStore
     let nextOrder: Int
+    var onSave: ((InspirationFolder) -> Void)? = nil
     @State private var name = ""
     @State private var theme = FolderTheme.default
     @State private var insertedFolder: InspirationFolder?
@@ -31,7 +32,7 @@ struct FolderFormView: View {
                         target.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         target.theme = theme.rawValue
                         target.updatedAt = Date()
-                        if store.save() { dismiss() } else { saveFailed = true }
+                        if store.save() { onSave?(target); dismiss() } else { saveFailed = true }
                     }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }

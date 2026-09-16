@@ -182,7 +182,7 @@ struct NoteBrowserView: View {
                     Button("가지 복구") { store.restore(note, notes: notes, folders: folders) }
                 }
             } else {
-                NavigationLink(value: note.id) {
+                Button { openNote(note) } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(draft.label).lineLimit(3)
                         if row.depth > 4 { Text("깊이 \(row.depth + 1)").font(.caption).foregroundStyle(.secondary) }
@@ -191,7 +191,7 @@ struct NoteBrowserView: View {
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
                     }.padding(.vertical, 6)
-                }
+                }.buttonStyle(.plain)
             }
         }
         .padding(.leading, CGFloat(min(row.depth, 4)) * 14)
