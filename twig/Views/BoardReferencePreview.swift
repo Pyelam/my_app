@@ -11,7 +11,7 @@ private struct BoardReferencePreview: View {
                                        configurations: configuration)
         guard let container else { return }
         let context = container.mainContext
-        let folder = InspirationFolder(name: "영감 메모앱")
+        let folder = InspirationFolder(name: "생각 메모 앱")
         context.insert(folder)
         func add(_ title: String, _ content: String, parent: InspirationNote? = nil, order: Int = 0) -> InspirationNote {
             let note = InspirationNote(folderID: folder.id, parentNoteID: parent?.id, content: content, sortOrder: order)
@@ -19,8 +19,8 @@ private struct BoardReferencePreview: View {
             context.insert(note)
             return note
         }
-        let root = add("영감 메모앱", "떠오른 생각을 빠르게 적고, 나중에 가지를 뻗으며 쓸모 있는 아이디어로 발전시키는 앱.")
-        root.tagNames = ["앱", "영감", "기획"]
+        let root = add("생각 메모 앱", "떠오른 생각을 빠르게 적고, 나중에 가지를 뻗으며 쓸모 있는 아이디어로 발전시키는 앱.")
+        root.tagNames = ["앱", "아이디어", "기획"]
         _ = add("왜 필요한가?", "생각은 금방 사라진다", parent: root)
         let flow = add("핵심 사용 흐름", "꼭 적기 → 발전시키기", parent: root, order: 1)
         _ = add("즉시 기록", "제목 · 분류 없이 저장", parent: flow)

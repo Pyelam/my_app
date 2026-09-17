@@ -17,6 +17,10 @@ struct NoteBrowserView: View {
     @State private var deletingNote: InspirationNote?
     @State private var randomID: UUID?
     @State private var editingFolder = false
+    @State private var isSelecting = false
+    @State private var selectedIDs: Set<UUID> = []
+    @State private var showingBatchMove = false
+    @State private var confirmingBatchDelete = false
 
     private var folder: InspirationFolder? {
         if case .folder(let id) = section { return folders.first { $0.id == id } }
@@ -24,11 +28,12 @@ struct NoteBrowserView: View {
     }
     private var title: String {
         switch section {
-        case .home: "다시 꺼내볼 영감"
+        case .home: "다시 꺼내볼 생각"
         case .inbox: "수집함"
+        case .favorites: "즐겨찾기"
         case .all: "전체 메모"
         case .trash: "휴지통"
-        case .folder: folder?.name ?? "영감 폴더"
+        case .folder: folder?.name ?? "생각 폴더"
         }
     }
     private var scoped: [InspirationNote] {
@@ -37,6 +42,7 @@ struct NoteBrowserView: View {
             guard !note.isDeleted else { return false }
             switch section {
             case .inbox: return note.folderID == nil || !folders.contains { $0.id == note.folderID && !$0.isDeleted }
+            case .favorites: return note.isFavorite
             case .folder(let id): return note.folderID == id
             default: return true
             }
@@ -60,19 +66,22 @@ struct NoteBrowserView: View {
                 let latest = revisions.filter { $0.noteID == note.id }.map(\.createdAt).max() ?? note.updatedAt
                 let modified = max(latest, note.updatedAt)
                 return modified >= lower && modified < upper
-            case "지정 날짜":
-                guard let date = draft.customDate else { return false }
-                return date >= CalendarDay.string(min(startDate, endDate)) && date <= CalendarDay.string(max(startDate, endDate))
             default: return true
             }
         }
     }
 
     private var rows: [TreeRow] {
-        if !search.isEmpty || dateKind != "없음" || section == .all || section == .home || section == .trash {
+        if !search.isEmpty || dateKind != "없음" || section == .favorites || section == .all || section == .home || section == .trash {
             return filtered.sorted { $0.updatedAt > $1.updatedAt }.map { TreeRow(note: $0, depth: 0) }
         }
         return TreeRow.flatten(scoped)
+    }
+    private var selectedNotes: [InspirationNote] {
+        notes.filter { selectedIDs.contains($0.id) && !$0.isDeleted }
+    }
+    private var selectedAreAllFavorites: Bool {
+        !selectedNotes.isEmpty && selectedNotes.allSatisfy(\.isFavorite)
     }
 
     var body: some View {
@@ -80,7 +89,7 @@ struct NoteBrowserView: View {
             if showingFilters {
                 VStack(alignment: .leading) {
                     Picker("날짜 기준", selection: $dateKind) {
-                        ForEach(["없음", "작성일", "수정일", "지정 날짜"], id: \.self) { Text($0) }
+                        ForEach(["없음", "작성일", "수정일"], id: \.self) { Text($0) }
                     }
                     if dateKind != "없음" {
                         DatePicker("시작", selection: $startDate, displayedComponents: .date)
@@ -105,18 +114,18 @@ struct NoteBrowserView: View {
                     }
                 }
                 if section == .home, search.isEmpty, dateKind == "없음", let note = rediscovered {
-                    Section("오늘 다시 볼 영감") {
+                    Section("오늘 다시 볼 생각") {
                         Button { openNote(note) } label: {
                             Label(NoteStore.draft(for: note, revisions: revisions).label, systemImage: "sparkles")
                         }
-                        Button("다른 영감 보기", systemImage: "shuffle") {
+                        Button("다른 생각 보기", systemImage: "shuffle") {
                             randomID = scoped.filter { $0.id != note.id }.randomElement()?.id ?? note.id
                         }
                     }
                 }
                 ForEach(rows) { row in noteRow(row) }
                 if rows.isEmpty && (section != .trash || folders.filter(\.isDeleted).isEmpty) {
-                    ContentUnavailableView(search.isEmpty ? "아직 영감이 없습니다" : "검색 결과가 없습니다",
+                    ContentUnavailableView(search.isEmpty ? "아직 메모가 없습니다" : "검색 결과가 없습니다",
                         systemImage: search.isEmpty ? "leaf" : "magnifyingglass",
                         description: Text(section == .trash ? "삭제한 메모는 이곳에서 복구할 수 있습니다." : "새 메모를 만들거나 검색 조건을 바꿔 보세요."))
                 }
@@ -124,22 +133,45 @@ struct NoteBrowserView: View {
         }
         .navigationTitle(title)
         .searchable(text: $search, prompt: "제목, 본문, #태그 검색")
+        .safeAreaInset(edge: .bottom) {
+            if isSelecting {
+                BatchNoteActionBar(
+                    count: selectedNotes.count,
+                    allFavorites: selectedAreAllFavorites,
+                    favorite: applyBatchFavorite,
+                    move: { showingBatchMove = true },
+                    trash: { confirmingBatchDelete = true }
+                )
+            }
+        }
         .toolbar {
             ToolbarItem {
                 Button("검색 필터", systemImage: dateKind == "없음" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") { showingFilters.toggle() }
             }
-            if section != .trash {
+            if section != .trash && section != .favorites {
                 ToolbarItem {
-                    Button("최상위 영감 추가", systemImage: "plus") { openNote(store.createNote(folderID: folder?.id, notes: notes)) }
+                    Button("최상위 생각 추가", systemImage: "plus") { openNote(store.createNote(folderID: folder?.id, notes: notes)) }
                 }
             }
             if folder != nil {
                 ToolbarItem { Button("폴더 수정", systemImage: "pencil") { editingFolder = true } }
             }
+            if section != .trash {
+                ToolbarItem {
+                    Button(isSelecting ? "선택 완료" : "여러 메모 선택",
+                           systemImage: isSelecting ? "checkmark" : "checkmark.circle") {
+                        isSelecting.toggle()
+                        if !isSelecting { selectedIDs.removeAll() }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $editingFolder) { FolderFormView(folder: folder, store: store, nextOrder: folders.count) }
         .sheet(item: $movingNote) { note in
             MoveNoteView(note: note, folders: folders, notes: notes, revisions: revisions, store: store)
+        }
+        .sheet(isPresented: $showingBatchMove, onDismiss: finishBatchSelection) {
+            BatchMoveNoteView(selectedNotes: selectedNotes, folders: folders, notes: notes, store: store)
         }
         .confirmationDialog("메모와 하위 가지를 이동할까요?", isPresented: Binding(
             get: { deletingNote != nil }, set: { if !$0 { deletingNote = nil } }
@@ -149,7 +181,20 @@ struct NoteBrowserView: View {
                 deletingNote = nil
             }
         } message: { Text("하위 가지도 함께 휴지통으로 이동하며, 나중에 복구할 수 있습니다.") }
-        .onChange(of: section) { _, _ in search = ""; dateKind = "없음" }
+        .confirmationDialog("선택한 메모와 하위 가지를 이동할까요?", isPresented: $confirmingBatchDelete,
+                            titleVisibility: .visible) {
+            Button("휴지통으로 이동", role: .destructive) {
+                store.trash(selectedNotes, notes: notes)
+                finishBatchSelection()
+            }
+        } message: {
+            Text("선택한 메모에 포함된 모든 하위 가지도 함께 이동하며 나중에 복구할 수 있습니다.")
+        }
+        .onChange(of: section) { _, _ in
+            search = ""
+            dateKind = "없음"
+            finishBatchSelection()
+        }
     }
 
     private var rediscovered: InspirationNote? {
@@ -165,6 +210,17 @@ struct NoteBrowserView: View {
         let draft = NoteStore.draft(for: note, revisions: revisions)
         let hasChildren = scoped.contains { $0.parentNoteID == note.id }
         return HStack(alignment: .top, spacing: 8) {
+            if isSelecting && section != .trash {
+                Button {
+                    toggleSelection(note.id)
+                } label: {
+                    Image(systemName: selectedIDs.contains(note.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .frame(minWidth: 32, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(selectedIDs.contains(note.id) ? "선택 해제" : "선택")
+            }
             if section != .trash && hasChildren {
                 Button {
                     note.isCollapsed.toggle()
@@ -182,9 +238,18 @@ struct NoteBrowserView: View {
                     Button("가지 복구") { store.restore(note, notes: notes, folders: folders) }
                 }
             } else {
-                Button { openNote(note) } label: {
+                Button {
+                    if isSelecting { toggleSelection(note.id) } else { openNote(note) }
+                } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(draft.label).lineLimit(3)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(draft.label).lineLimit(3)
+                            if note.isFavorite {
+                                Image(systemName: "star.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.yellow)
+                            }
+                        }
                         if row.depth > 4 { Text("깊이 \(row.depth + 1)").font(.caption).foregroundStyle(.secondary) }
                         if !draft.tags.isEmpty {
                             Text(draft.tags.map { "#" + $0 }.joined(separator: " "))
@@ -196,8 +261,15 @@ struct NoteBrowserView: View {
         }
         .padding(.leading, CGFloat(min(row.depth, 4)) * 14)
         .tag(note.id)
+        .listRowBackground(isSelecting && selectedIDs.contains(note.id)
+                           ? Color.accentColor.opacity(0.12)
+                           : Color.clear)
         .contextMenu {
             if !note.isDeleted {
+                Button(note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가",
+                       systemImage: note.isFavorite ? "star.slash" : "star") {
+                    store.toggleFavorite(note)
+                }
                 Button("가지 만들기", systemImage: "plus") { openNote(store.createNote(folderID: note.folderID, parentID: note.id, notes: notes)) }
                 Button("위로 이동", systemImage: "arrow.up") { store.reorder(note, offset: -1, notes: notes) }
                 Button("아래로 이동", systemImage: "arrow.down") { store.reorder(note, offset: 1, notes: notes) }
@@ -205,6 +277,53 @@ struct NoteBrowserView: View {
                 Button("휴지통으로 이동", systemImage: "trash", role: .destructive) { deletingNote = note }
             }
         }
+    }
+
+    private func toggleSelection(_ id: UUID) {
+        if selectedIDs.contains(id) {
+            selectedIDs.remove(id)
+        } else {
+            selectedIDs.insert(id)
+        }
+    }
+
+    private func applyBatchFavorite() {
+        store.setFavorite(selectedNotes, isFavorite: !selectedAreAllFavorites)
+        finishBatchSelection()
+    }
+
+    private func finishBatchSelection() {
+        isSelecting = false
+        selectedIDs.removeAll()
+    }
+}
+
+private struct BatchNoteActionBar: View {
+    let count: Int
+    let allFavorites: Bool
+    let favorite: () -> Void
+    let move: () -> Void
+    let trash: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(count)개 선택")
+                .font(.callout.weight(.semibold))
+            Spacer(minLength: 8)
+            Button(allFavorites ? "즐겨찾기 해제" : "즐겨찾기", systemImage: allFavorites ? "star.slash" : "star") {
+                favorite()
+            }
+            .labelStyle(.iconOnly)
+            Button("이동", systemImage: "folder") { move() }
+                .labelStyle(.iconOnly)
+            Button("휴지통", systemImage: "trash", role: .destructive) { trash() }
+                .labelStyle(.iconOnly)
+        }
+        .buttonStyle(.bordered)
+        .disabled(count == 0)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
     }
 }
 

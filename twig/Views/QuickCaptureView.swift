@@ -22,7 +22,7 @@ struct QuickCaptureView: View {
               VStack(alignment: .leading, spacing: 16) {
                 Text("분류는 나중에 해도 괜찮아요.").foregroundStyle(.secondary)
                 TextEditor(text: $content).focused($focused).frame(minHeight: 180)
-                    .accessibilityLabel("빠른 영감 본문")
+                    .accessibilityLabel("빠른 메모 본문")
                 Label(saveFailed ? "저장 실패 · 다시 시도해 주세요" : (captured == nil ? "입력하면 수집함에 저장됩니다" : "기기에 저장됨"),
                       systemImage: saveFailed ? "exclamationmark.triangle" : "tray")
                     .font(.caption).foregroundStyle(.secondary)
@@ -47,7 +47,7 @@ struct QuickCaptureView: View {
                 }
               }.padding()
             }
-            .navigationTitle("빠른 영감")
+            .navigationTitle("빠른 메모")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("닫기") { persist(); if !saveFailed { dismiss() } }

@@ -5,8 +5,15 @@ import SwiftData
 @MainActor
 @Observable
 final class NoteStore {
+    enum SaveState: Equatable {
+        case saved
+        case saving
+        case failed
+    }
+
     let context: ModelContext
     var errorMessage: String?
+    private(set) var saveState: SaveState = .saved
     private(set) var pendingDrafts: [UUID: NoteDraft] = [:]
     private(set) var undoMessage: String?
     private var pendingCheckpoints: [UUID: UUID] = [:]
@@ -41,12 +48,15 @@ final class NoteStore {
 
     @discardableResult
     func save() -> Bool {
+        saveState = .saving
         do {
             try context.save()
             errorMessage = nil
+            saveState = .saved
             return true
         } catch {
             errorMessage = "저장하지 못했습니다. 입력 내용은 현재 화면에 유지됩니다. 저장 공간을 확인한 후 다시 시도해 주세요.\n\(error.localizedDescription)"
+            saveState = .failed
             return false
         }
     }
@@ -85,6 +95,7 @@ final class NoteStore {
             }
         } catch {
             errorMessage = "편집 기록을 저장하지 못했습니다. \(error.localizedDescription)"
+            saveState = .failed
             return false
         }
         note.title = draft.title
@@ -109,7 +120,10 @@ final class NoteStore {
                 if !commit(draft, to: note, checkpointID: pendingCheckpoints[id] ?? UUID()) { return }
             }
             save()
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            errorMessage = error.localizedDescription
+            saveState = .failed
+        }
     }
 
     func touchFolder(_ id: UUID?) {
@@ -117,7 +131,115 @@ final class NoteStore {
         do {
             let folders = try context.fetch(FetchDescriptor<InspirationFolder>())
             folders.first { $0.id == id }?.updatedAt = Date()
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            errorMessage = error.localizedDescription
+            saveState = .failed
+        }
+    }
+
+    func toggleFavorite(_ note: InspirationNote) {
+        let wasFavorite = note.isFavorite
+        let previousUpdatedAt = note.updatedAt
+        note.isFavorite.toggle()
+        note.updatedAt = Date()
+        touchFolder(note.folderID)
+        if save() {
+            offerUndo(note.isFavorite ? "즐겨찾기에 추가했습니다" : "즐겨찾기에서 해제했습니다") { [weak self] in
+                note.isFavorite = wasFavorite
+                note.updatedAt = previousUpdatedAt
+                self?.touchFolder(note.folderID)
+            }
+        }
+    }
+
+    func setFavorite(_ selectedNotes: [InspirationNote], isFavorite: Bool) {
+        guard !selectedNotes.isEmpty else { return }
+        let snapshots = selectedNotes.map { ($0, $0.isFavorite, $0.updatedAt) }
+        let now = Date()
+        for note in selectedNotes {
+            note.isFavorite = isFavorite
+            note.updatedAt = now
+            touchFolder(note.folderID)
+        }
+        if save() {
+            offerUndo(isFavorite ? "선택한 메모를 즐겨찾기에 추가했습니다" : "선택한 메모를 즐겨찾기에서 해제했습니다") { [weak self] in
+                for (note, favorite, updatedAt) in snapshots {
+                    note.isFavorite = favorite
+                    note.updatedAt = updatedAt
+                    self?.touchFolder(note.folderID)
+                }
+            }
+        }
+    }
+
+    func move(_ selectedNotes: [InspirationNote], folderID: UUID?, notes: [InspirationNote]) {
+        let roots = selectedRoots(from: selectedNotes, notes: notes)
+        guard !roots.isEmpty else { return }
+        let movingIDs = roots.reduce(into: Set<UUID>()) { result, root in
+            result.formUnion(Self.descendants(of: root.id, notes: notes))
+        }
+        let snapshots = notes.filter { movingIDs.contains($0.id) }.map {
+            NotePlacement(note: $0, folderID: $0.folderID, parentNoteID: $0.parentNoteID,
+                          sortOrder: $0.sortOrder, updatedAt: $0.updatedAt)
+        }
+        let oldFolders = Set(snapshots.compactMap(\.folderID))
+        var nextOrder = (notes.filter {
+            !$0.isDeleted && $0.folderID == folderID && $0.parentNoteID == nil && !movingIDs.contains($0.id)
+        }.map(\.sortOrder).max() ?? -1) + 1
+        let now = Date()
+        for root in roots {
+            root.parentNoteID = nil
+            root.sortOrder = nextOrder
+            nextOrder += 1
+            for member in notes where Self.descendants(of: root.id, notes: notes).contains(member.id) {
+                member.folderID = folderID
+                member.updatedAt = now
+            }
+        }
+        oldFolders.forEach(touchFolder)
+        touchFolder(folderID)
+        if save() {
+            offerUndo("선택한 가지를 이동했습니다") { [weak self] in
+                for snapshot in snapshots {
+                    snapshot.note.folderID = snapshot.folderID
+                    snapshot.note.parentNoteID = snapshot.parentNoteID
+                    snapshot.note.sortOrder = snapshot.sortOrder
+                    snapshot.note.updatedAt = snapshot.updatedAt
+                }
+                oldFolders.forEach { self?.touchFolder($0) }
+                self?.touchFolder(folderID)
+            }
+        }
+    }
+
+    func trash(_ selectedNotes: [InspirationNote], notes: [InspirationNote]) {
+        let roots = selectedRoots(from: selectedNotes, notes: notes)
+        guard !roots.isEmpty else { return }
+        let deletingIDs = roots.reduce(into: Set<UUID>()) { result, root in
+            result.formUnion(Self.descendants(of: root.id, notes: notes))
+        }
+        let snapshots = notes.filter { deletingIDs.contains($0.id) }.map {
+            NoteDeletion(note: $0, isDeleted: $0.isDeleted, deletedAt: $0.deletedAt,
+                         deletionBatchID: $0.deletionBatchID)
+        }
+        let batch = UUID()
+        let now = Date()
+        for note in notes where deletingIDs.contains(note.id) && !note.isDeleted {
+            note.isDeleted = true
+            note.deletedAt = now
+            note.deletionBatchID = batch
+            touchFolder(note.folderID)
+        }
+        if save() {
+            offerUndo("선택한 가지를 휴지통으로 이동했습니다") { [weak self] in
+                for snapshot in snapshots {
+                    snapshot.note.isDeleted = snapshot.isDeleted
+                    snapshot.note.deletedAt = snapshot.deletedAt
+                    snapshot.note.deletionBatchID = snapshot.deletionBatchID
+                    self?.touchFolder(snapshot.note.folderID)
+                }
+            }
+        }
     }
 
     func createNote(folderID: UUID?, parentID: UUID? = nil, notes: [InspirationNote]) -> InspirationNote {
@@ -290,6 +412,19 @@ final class NoteStore {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    private func selectedRoots(from selectedNotes: [InspirationNote], notes: [InspirationNote]) -> [InspirationNote] {
+        let selectedIDs = Set(selectedNotes.map(\.id))
+        return selectedNotes.filter { note in
+            var parentID = note.parentNoteID
+            var visited: Set<UUID> = []
+            while let id = parentID, visited.insert(id).inserted {
+                if selectedIDs.contains(id) { return false }
+                parentID = notes.first { $0.id == id }?.parentNoteID
+            }
+            return true
         }
     }
 }

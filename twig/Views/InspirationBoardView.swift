@@ -40,8 +40,8 @@ struct InspirationBoardView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Image(systemName: "point.topleft.down.to.point.bottomright.curvepath").font(.title2).foregroundStyle(.secondary)
                     Text("작은 생각 하나에서 시작해요").font(.headline)
-                    Text("첫 영감을 적고, 옆의 + 버튼으로 가지를 뻗어보세요.").font(.callout).foregroundStyle(.secondary)
-                    Button("첫 영감 만들기") { addRoot() }.buttonStyle(BoardPrimaryButtonStyle())
+                    Text("첫 생각을 적고, 옆의 + 버튼으로 가지를 뻗어보세요.").font(.callout).foregroundStyle(.secondary)
+                    Button("첫 생각 만들기") { addRoot() }.buttonStyle(BoardPrimaryButtonStyle())
                 }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 graph
@@ -61,7 +61,7 @@ struct InspirationBoardView: View {
         .sheet(item: $movingNote) { note in
             MoveNoteView(note: note, folders: allFolders, notes: allNotes, revisions: revisions, store: store)
         }
-        .confirmationDialog("이 영감과 하위 가지를 휴지통으로 이동할까요?", isPresented: Binding(
+        .confirmationDialog("이 메모와 하위 가지를 휴지통으로 이동할까요?", isPresented: Binding(
             get: { deletingNote != nil }, set: { if !$0 { deletingNote = nil } }
         ), titleVisibility: .visible) {
             Button("휴지통으로 이동", role: .destructive) {
@@ -100,7 +100,7 @@ struct InspirationBoardView: View {
                 .font(.caption).buttonStyle(.bordered).tint(.secondary)
                 .accessibilityHint("이 폴더의 모든 가지에 적용합니다")
             }
-            Button("최상위 영감 추가", systemImage: "plus") { addRoot() }
+            Button("최상위 생각 추가", systemImage: "plus") { addRoot() }
                 .labelStyle(.iconOnly)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -191,11 +191,18 @@ struct InspirationBoardView: View {
             ? (note.updatedAt.formatted(date: .abbreviated, time: .omitted))
             : (draft.content.isEmpty ? "생각을 이어서 적어보세요" : draft.content)
 
-        return HStack(spacing: 0) {
-            ZStack(alignment: .bottomTrailing) {
+        return HStack(alignment: .center, spacing: 0) {
+            ZStack(alignment: .trailing) {
                 Button { select(note) } label: {
                     VStack(alignment: .leading, spacing: 7) {
-                        Text(draft.label).font(.callout.weight(.semibold)).lineLimit(2)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(draft.label).font(.callout.weight(.semibold)).lineLimit(2)
+                            if note.isFavorite {
+                                Image(systemName: "star.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.yellow)
+                            }
+                        }
                         Text(subtitle).font(.caption2).lineLimit(1).opacity(0.65)
                     }
                     .padding(.leading, 13).padding(.trailing, parents.contains(note.id) ? 32 : 13)
@@ -217,8 +224,13 @@ struct InspirationBoardView: View {
                         store.save()
                     } label: {
                         Image(systemName: note.isCollapsed ? "chevron.right" : "chevron.down")
-                            .font(.system(size: 10, weight: .medium)).foregroundStyle(textColor.opacity(0.7))
-                            .frame(width: 32, height: 44).contentShape(Rectangle())
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(textColor.opacity(0.7))
+                            .frame(width: 23, height: 23)
+                            .background(background, in: Circle())
+                            .overlay(Circle().strokeBorder(BoardStyle.rule(scheme), lineWidth: 1))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                         .accessibilityLabel(note.isCollapsed ? "하위 가지 펼치기" : "하위 가지 접기")
                 }

@@ -17,7 +17,7 @@ struct InlineCaptureBar: View {
                 TextField("방금 떠오른 생각을 적어보세요…", text: $text, axis: .vertical)
                     .textFieldStyle(.plain).lineLimit(1...3)
                     .padding(.vertical, 11)
-                    .accessibilityLabel("빠른 영감 입력")
+                    .accessibilityLabel("빠른 메모 입력")
                 Button("수집함에 담기") { finish() }
                     .buttonStyle(BoardPrimaryButtonStyle())
                     .disabled(captured == nil && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

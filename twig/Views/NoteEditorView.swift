@@ -72,16 +72,6 @@ struct NoteEditorView: View {
                     Divider()
                     TextField("태그 · 공백 또는 쉼표로 구분", text: $tagText)
                         .onChange(of: tagText) { _, text in draft.tags = NoteDraft.normalizedTags(text) }
-                    Toggle("사용자 지정 날짜", isOn: Binding(
-                        get: { draft.customDate != nil },
-                        set: { draft.customDate = $0 ? CalendarDay.string(Date()) : nil }
-                    ))
-                    if draft.customDate != nil {
-                        DatePicker("날짜", selection: Binding(
-                            get: { CalendarDay.date(draft.customDate ?? "") ?? Date() },
-                            set: { draft.customDate = CalendarDay.string($0) }
-                        ), displayedComponents: .date)
-                    }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("작성 \(note.createdAt.formatted(date: .abbreviated, time: .shortened))")
                         Text("수정 \(note.updatedAt.formatted(date: .abbreviated, time: .shortened))")
@@ -99,7 +89,7 @@ struct NoteEditorView: View {
                 }.padding()
             }
         }
-        .navigationTitle("영감 편집")
+        .navigationTitle("메모 편집")
         .toolbar {
             ToolbarItem {
                 Button("가지 만들기", systemImage: "plus") {
@@ -108,6 +98,10 @@ struct NoteEditorView: View {
             }
             ToolbarItem {
                 Menu("메모 작업", systemImage: "ellipsis.circle") {
+                    Button(note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가",
+                           systemImage: note.isFavorite ? "star.slash" : "star") {
+                        store.toggleFavorite(note)
+                    }
                     Button("폴더 또는 부모 변경", systemImage: "arrow.turn.up.right") { showingMove = true }
                     Button("위로 이동", systemImage: "arrow.up") { store.reorder(note, offset: -1, notes: notes) }
                     Button("아래로 이동", systemImage: "arrow.down") { store.reorder(note, offset: 1, notes: notes) }

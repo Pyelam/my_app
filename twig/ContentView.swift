@@ -8,7 +8,7 @@ struct ContentView: View {
 }
 
 enum WorkspaceSection: Hashable {
-    case home, inbox, all, trash, folder(UUID)
+    case home, inbox, favorites, all, trash, folder(UUID)
 }
 
 struct WorkspaceView: View {
@@ -32,6 +32,9 @@ struct WorkspaceView: View {
     @State private var exportDocument = MarkdownDocument(text: "")
     @State private var targetedDropSection: WorkspaceSection?
     @State private var showingSyncStatus = false
+    @State private var showingOnboarding = false
+    @AppStorage("recentNoteIDs") private var recentNoteIDStorage = ""
+    @AppStorage("didCompleteOnboarding") private var didCompleteOnboarding = false
 
     init(context: ModelContext) {
         _store = State(initialValue: NoteStore(context: context))
@@ -54,6 +57,27 @@ struct WorkspaceView: View {
         if case .folder = section { return true }
         return section == .inbox
     }
+    private var recentNotes: [InspirationNote] {
+        recentNoteIDStorage.split(separator: ",").compactMap { value in
+            guard let id = UUID(uuidString: String(value)) else { return nil }
+            return notes.first { $0.id == id && !$0.isDeleted }
+        }
+    }
+    private var navigationNotes: [InspirationNote] {
+        let active = notes.filter { !$0.isDeleted }
+        switch section ?? .home {
+        case .inbox:
+            return NoteStore.sorted(boardNotes)
+        case .folder:
+            return NoteStore.sorted(boardNotes)
+        case .favorites:
+            return active.filter(\.isFavorite).sorted { $0.updatedAt > $1.updatedAt }
+        case .home, .all:
+            return active.sorted { $0.updatedAt > $1.updatedAt }
+        case .trash:
+            return []
+        }
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredColumn) {
@@ -73,6 +97,7 @@ struct WorkspaceView: View {
             }
         }
         .task {
+            if !didCompleteOnboarding { showingOnboarding = true }
             guard !didChooseInitialFolder else { return }
             didChooseInitialFolder = true
             section = activeFolders.first.map { .folder($0.id) } ?? .inbox
@@ -94,6 +119,12 @@ struct WorkspaceView: View {
             }
         }
         .sheet(isPresented: $showingSyncStatus) { SyncStatusView() }
+        .sheet(isPresented: $showingOnboarding, onDismiss: { didCompleteOnboarding = true }) {
+            OnboardingView {
+                didCompleteOnboarding = true
+                showingOnboarding = false
+            }
+        }
         .sheet(isPresented: Binding(get: { editingNoteID != nil }, set: { if !$0 { editingNoteID = nil } })) {
             NavigationStack {
                 if let note = notes.first(where: { $0.id == editingNoteID && !$0.isDeleted }) {
@@ -136,8 +167,6 @@ struct WorkspaceView: View {
 
     private var workspaceSurface: some View {
         VStack(spacing: 0) {
-            InlineCaptureBar(notes: notes, store: store)
-            Divider()
             GeometryReader { geometry in
                 VStack(spacing: 0) {
                     if showsBoard {
@@ -157,6 +186,9 @@ struct WorkspaceView: View {
                             revisions: revisions,
                             store: store,
                             totalHeight: geometry.size.height,
+                            previous: adjacentNote(offset: -1),
+                            next: adjacentNote(offset: 1),
+                            navigate: openNote,
                             edit: { editNote(note) }
                         )
                     }
@@ -185,6 +217,9 @@ struct WorkspaceView: View {
         .navigationTitle("Twig")
         .toolbar {
             ToolbarItem {
+                SaveStatusIndicator(state: store.saveState)
+            }
+            ToolbarItem {
                 Button("새 폴더", systemImage: "folder.badge.plus") { editingFolder = nil; showingFolderForm = true }
             }
             if showsBoard {
@@ -204,7 +239,7 @@ struct WorkspaceView: View {
         List(selection: $section) {
             Section {
                 Button { showingQuickCapture = true } label: {
-                    Label("빠른 영감 기록", systemImage: "square.and.pencil").padding(.vertical, 6)
+                    Label("빠른 메모", systemImage: "square.and.pencil").padding(.vertical, 6)
                 }.keyboardShortcut("n", modifiers: .command)
                 NavigationLink(value: WorkspaceSection.home) { Label("홈", systemImage: "house") }
                 NavigationLink(value: WorkspaceSection.inbox) {
@@ -217,8 +252,11 @@ struct WorkspaceView: View {
                 }
                 .listRowBackground(targetedDropSection == .inbox ? Color.green.opacity(0.18) : Color.clear)
                 NavigationLink(value: WorkspaceSection.all) { Label("전체 메모 검색", systemImage: "magnifyingglass") }
+                NavigationLink(value: WorkspaceSection.favorites) {
+                    Label("즐겨찾기 · \(notes.filter { !$0.isDeleted && $0.isFavorite }.count)", systemImage: "star")
+                }
             }
-            Section("영감 폴더") {
+            Section("생각 폴더") {
                 ForEach(activeFolders) { folder in
                     NavigationLink(value: WorkspaceSection.folder(folder.id)) {
                         VStack(alignment: .leading, spacing: 4) {
@@ -250,8 +288,19 @@ struct WorkspaceView: View {
                     }
                 }
             }
+            if !recentNotes.isEmpty {
+                Section("최근 본 메모") {
+                    ForEach(recentNotes.prefix(5)) { note in
+                        Button { openRecentNote(note) } label: {
+                            Label(NoteStore.draft(for: note, revisions: revisions).label,
+                                  systemImage: "clock")
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
             if let note = notes.filter({ !$0.isDeleted }).min(by: { $0.updatedAt < $1.updatedAt }) {
-                Section("다시 꺼내볼 영감") {
+                Section("다시 꺼내볼 생각") {
                     Button { openNote(note) } label: {
                         Label(NoteStore.draft(for: note, revisions: revisions).label, systemImage: "sparkles")
                             .lineLimit(3)
@@ -267,6 +316,9 @@ struct WorkspaceView: View {
                 Button { showingSyncStatus = true } label: {
                     Label(StorageConfiguration.status, systemImage: "icloud")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                Button("사용 방법", systemImage: "questionmark.circle") {
+                    showingOnboarding = true
                 }
             }
         }
@@ -285,7 +337,34 @@ struct WorkspaceView: View {
         }
         if expanded { store.save() }
         selectedNoteID = note.id
+        recordRecentlyViewed(note.id)
         preferredColumn = .detail
+    }
+
+    private func openRecentNote(_ note: InspirationNote) {
+        recordRecentlyViewed(note.id)
+        let destination = note.folderID.map(WorkspaceSection.folder) ?? .inbox
+        if section == destination {
+            openNote(note)
+        } else {
+            pendingCaptureID = note.id
+            section = destination
+        }
+    }
+
+    private func adjacentNote(offset: Int) -> InspirationNote? {
+        guard let selectedNoteID,
+              let index = navigationNotes.firstIndex(where: { $0.id == selectedNoteID }) else { return nil }
+        let destination = index + offset
+        guard navigationNotes.indices.contains(destination) else { return nil }
+        return navigationNotes[destination]
+    }
+
+    private func recordRecentlyViewed(_ id: UUID) {
+        var ids = recentNoteIDStorage.split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+        ids.removeAll { $0 == id }
+        ids.insert(id, at: 0)
+        recentNoteIDStorage = ids.prefix(12).map(\.uuidString).joined(separator: ",")
     }
 
     private func moveDroppedNote(_ items: [String], folderID: UUID?, destination: WorkspaceSection) -> Bool {
@@ -299,6 +378,102 @@ struct WorkspaceView: View {
             section = destination
         }
         return true
+    }
+}
+
+private struct SaveStatusIndicator: View {
+    let state: NoteStore.SaveState
+
+    var body: some View {
+        Label(title, systemImage: icon)
+            .font(.caption)
+            .foregroundStyle(color)
+            .accessibilityLabel(title)
+    }
+
+    private var title: String {
+        switch state {
+        case .saved: "저장됨"
+        case .saving: "저장 중"
+        case .failed: "저장 실패"
+        }
+    }
+
+    private var icon: String {
+        switch state {
+        case .saved: "checkmark.circle"
+        case .saving: "arrow.triangle.2.circlepath"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    private var color: Color {
+        state == .failed ? .red : .secondary
+    }
+}
+
+private struct OnboardingView: View {
+    let complete: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.green)
+                        Text("생각을 가지처럼 연결하세요")
+                            .font(.title.bold())
+                        Text("Twig에서는 짧게 기록한 생각을 연결하고 자유롭게 다시 배치할 수 있습니다.")
+                            .foregroundStyle(.secondary)
+                    }
+                    OnboardingTip(icon: "plus", title: "가지 만들기",
+                                  detail: "메모 옆의 +를 눌러 이어지는 하위 가지를 만드세요.")
+                    OnboardingTip(icon: "hand.draw", title: "길게 눌러 이동",
+                                  detail: "가지를 길게 누른 뒤 다른 가지나 최상위 영역으로 끌어 이동하세요.")
+                    OnboardingTip(icon: "hand.point.up.left", title: "배경을 밀어 탐색",
+                                  detail: "카드가 아닌 배경을 터치하거나 드래그해 넓은 보드를 이동하세요.")
+                    OnboardingTip(icon: "rectangle.bottomthird.inset.filled", title: "선택 패널 조절",
+                                  detail: "하단 손잡이를 움직여 선택한 메모의 내용을 편한 크기로 확인하세요.")
+                    OnboardingTip(icon: "checkmark.circle", title: "여러 메모 정리",
+                                  detail: "목록의 선택 버튼으로 여러 메모를 즐겨찾기·이동·삭제할 수 있습니다.")
+                    Button("Twig 시작하기") { complete() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(28)
+                .frame(maxWidth: 560, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+            .navigationTitle("사용 방법")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("완료") { complete() }
+                }
+            }
+        }
+        .editorSheetSize(minHeight: 560)
+    }
+}
+
+private struct OnboardingTip: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: icon)
+                .font(.title3)
+                .frame(width: 36, height: 36)
+                .background(.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

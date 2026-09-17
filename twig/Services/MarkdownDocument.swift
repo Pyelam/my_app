@@ -32,15 +32,15 @@ struct MarkdownDocument: FileDocument {
                       "- 순서: \(note.sortOrder)",
                       "- 작성: \(note.createdAt.ISO8601Format())",
                       "- 수정: \(note.updatedAt.ISO8601Format())",
-                      "- 지정 날짜: \(draft.customDate ?? "없음")",
                       "- 태그: \(draft.tags.map { "#" + $0 }.joined(separator: " "))",
+                      "- 즐겨찾기: \(note.isFavorite ? "예" : "아니요")",
                       "- 휴지통: \(note.isDeleted ? "예" : "아니요")", "", draft.content, ""]
             let history = revisions.filter { $0.noteID == note.id }.sorted { $0.createdAt < $1.createdAt }
             if !history.isEmpty { lines += ["### 편집 기록", ""] }
             for revision in history {
                 lines += ["#### \(revision.createdAt.ISO8601Format()) · \(revision.id)", "",
                           revision.title, "", revision.content, "",
-                          "태그: \(revision.tagNames.joined(separator: ", ")) · 지정 날짜: \(revision.customDate ?? "없음")", ""]
+                          "태그: \(revision.tagNames.joined(separator: ", "))", ""]
             }
             lines += ["---", ""]
         }

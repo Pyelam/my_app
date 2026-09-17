@@ -23,7 +23,7 @@ struct FolderFormView: View {
                 }
                 if saveFailed { Text("저장하지 못했습니다. 다시 시도해 주세요.").foregroundStyle(.red) }
             }
-            .navigationTitle(folder == nil ? "새 영감 폴더" : "폴더 수정")
+            .navigationTitle(folder == nil ? "새 생각 폴더" : "폴더 수정")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("취소") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

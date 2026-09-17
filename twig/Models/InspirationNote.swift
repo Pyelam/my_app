@@ -15,6 +15,7 @@ final class InspirationNote {
     var updatedAt: Date = Date()
     var sortOrder: Int = 0
     var isCollapsed: Bool = false
+    var isFavorite: Bool = false
     var isDeleted: Bool = false
     var deletedAt: Date?
     var deletionBatchID: UUID?
@@ -63,7 +64,7 @@ struct NoteDraft: Equatable {
         let heading = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !heading.isEmpty { return heading }
         let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "새 영감" : String(text.prefix(100))
+        return text.isEmpty ? "새 메모" : String(text.prefix(100))
     }
 
     static func normalizedTags(_ text: String) -> [String] {

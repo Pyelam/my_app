@@ -8,6 +8,9 @@ struct ResizableSelectedNotePanel: View {
     let revisions: [NoteRevision]
     let store: NoteStore
     let totalHeight: CGFloat
+    let previous: InspirationNote?
+    let next: InspirationNote?
+    let navigate: (InspirationNote) -> Void
     let edit: () -> Void
     @State private var panelHeight: CGFloat = 240
     @State private var previousExpandedHeight: CGFloat = 240
@@ -25,6 +28,9 @@ struct ResizableSelectedNotePanel: View {
                 notes: notes,
                 revisions: revisions,
                 store: store,
+                previous: previous,
+                next: next,
+                navigate: navigate,
                 edit: edit
             )
             .id(note.id)
@@ -52,7 +58,7 @@ struct ResizableSelectedNotePanel: View {
                                 resize(to: panelHeight - value.translation.height)
                             }
                     )
-                    .accessibilityLabel("선택한 영감 패널 크기")
+                    .accessibilityLabel("선택한 메모 패널 크기")
                     .accessibilityValue("높이 \(Int(height))")
                     .accessibilityAdjustableAction { direction in
                         switch direction {
@@ -65,7 +71,7 @@ struct ResizableSelectedNotePanel: View {
                         }
                     }
                 Spacer()
-                Button(minimized ? "선택한 영감 펼치기" : "선택한 영감 최소화",
+                Button(minimized ? "선택한 메모 펼치기" : "선택한 메모 최소화",
                        systemImage: minimized ? "chevron.up" : "chevron.down") {
                     togglePanel()
                 }
@@ -114,6 +120,9 @@ struct SelectedNotePanel: View {
     let notes: [InspirationNote]
     let revisions: [NoteRevision]
     let store: NoteStore
+    let previous: InspirationNote?
+    let next: InspirationNote?
+    let navigate: (InspirationNote) -> Void
     let edit: () -> Void
     @State private var showingMove = false
     @State private var isInlineEditing = false
@@ -130,40 +139,61 @@ struct SelectedNotePanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 9) {
-                        Text("선택한 영감").font(.caption2).foregroundStyle(.secondary)
-                        if isInlineEditing {
-                            TextField("제목 (선택)", text: $inlineDraft.title, axis: .vertical)
-                                .font(.title3.weight(.semibold))
-                                .textFieldStyle(.plain)
-                                .focused($inlineFocus, equals: .title)
-                                .accessibilityLabel("선택한 영감 제목")
-                        } else {
-                            Button { startInlineEditing(focus: .title) } label: {
-                                Text(draft.label).font(.title3.weight(.semibold)).lineLimit(2)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("누르면 이 패널에서 바로 편집합니다")
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(alignment: .center) {
+                        Text("선택한 메모").font(.caption2).foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button(note.isFavorite ? "즐겨찾기 해제" : "즐겨찾기 추가",
+                               systemImage: note.isFavorite ? "star.fill" : "star") {
+                            store.toggleFavorite(note)
                         }
-                        Text(note.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 12)
-                    HStack {
+                        .labelStyle(.iconOnly)
+                        .tint(note.isFavorite ? .yellow : .secondary)
+                        Button("이전 메모", systemImage: "chevron.left") {
+                            if let previous { navigate(previous) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .disabled(previous == nil)
+                        Button("다음 메모", systemImage: "chevron.right") {
+                            if let next { navigate(next) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .disabled(next == nil)
                         if isInlineEditing {
                             Button("인라인 편집 완료", systemImage: "checkmark") { finishInlineEditing() }
                                 .labelStyle(.iconOnly)
                         }
                         Button("이동", systemImage: "arrow.turn.up.right") { showingMove = true }
+                            .labelStyle(.iconOnly)
                         Button("편집", systemImage: "pencil") {
                             persistInlineDraft()
                             edit()
                         }
+                        .labelStyle(.iconOnly)
                     }
                     .font(.caption).buttonStyle(.bordered).tint(.secondary)
+                    if isInlineEditing {
+                        TextField("제목 (선택)", text: $inlineDraft.title, axis: .vertical)
+                            .font(.title3.weight(.semibold))
+                            .textFieldStyle(.plain)
+                            .focused($inlineFocus, equals: .title)
+                            .accessibilityLabel("선택한 메모 제목")
+                    } else {
+                        Button { startInlineEditing(focus: .title) } label: {
+                            Text(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                 ? "제목 추가"
+                                 : draft.title)
+                                .font(.title3.weight(.semibold)).lineLimit(2)
+                                .foregroundStyle(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                                 ? .secondary : .primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("누르면 이 패널에서 바로 편집합니다")
+                    }
+                    Text(note.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 if isInlineEditing {
                     TextEditor(text: $inlineDraft.content)
@@ -171,7 +201,7 @@ struct SelectedNotePanel: View {
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 90)
                         .focused($inlineFocus, equals: .content)
-                        .accessibilityLabel("선택한 영감 본문")
+                        .accessibilityLabel("선택한 메모 본문")
                     if inlineSaveFailed {
                         Button("저장하지 못했습니다 · 다시 저장") { persistInlineDraft() }
                             .font(.caption).foregroundStyle(.red)
@@ -179,7 +209,7 @@ struct SelectedNotePanel: View {
                 } else if !draft.content.isEmpty {
                     Button { startInlineEditing(focus: .content) } label: {
                         Text(draft.content).font(.callout).foregroundStyle(.secondary)
-                            .lineSpacing(5).textSelection(.enabled)
+                            .lineSpacing(5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
@@ -215,18 +245,15 @@ struct SelectedNotePanel: View {
 
     private func startInlineEditing(focus: InlineField) {
         let current = store.pendingDrafts[note.id] ?? NoteStore.draft(for: note, revisions: revisions)
-        var editable = current
-        if focus == .title,
-           editable.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !editable.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            editable.title = current.label
-        }
-        inlineDraft = editable
-        lastSavedInlineDraft = editable
+        inlineDraft = current
+        lastSavedInlineDraft = current
         inlineCheckpointID = UUID()
         inlineSaveFailed = false
         isInlineEditing = true
-        inlineFocus = focus
+        Task { @MainActor in
+            await Task.yield()
+            inlineFocus = focus
+        }
     }
 
     private func finishInlineEditing() {
