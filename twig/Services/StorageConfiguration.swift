@@ -9,7 +9,7 @@ enum StorageConfiguration {
     }
 
     static var status: String {
-        cloudContainerID == nil ? "기기에 저장 · iCloud 미연결" : "기기에 저장 · iCloud 동기화 설정됨"
+        cloudContainerID == nil ? "기기에 저장 · iCloud 미연결" : "기기에 저장 · iCloud 컨테이너 설정됨"
     }
 
     static func makeContainer() throws -> ModelContainer {

@@ -40,6 +40,7 @@ final class NoteRevision {
     var tagNames: [String] = []
     var customDate: String?
     var createdAt: Date = Date()
+    var sourceInstallationID: String = ""
 
     init(noteID: UUID, draft: NoteDraft, id: UUID = UUID()) {
         self.id = id
@@ -48,6 +49,7 @@ final class NoteRevision {
         content = draft.content
         tagNames = draft.tags
         customDate = draft.customDate
+        sourceInstallationID = InstallationIdentity.current
     }
 }
 

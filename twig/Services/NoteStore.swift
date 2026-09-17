@@ -77,6 +77,9 @@ final class NoteStore {
                 checkpoint.tagNames = draft.tags
                 checkpoint.customDate = draft.customDate
                 checkpoint.createdAt = Date()
+                if checkpoint.sourceInstallationID.isEmpty {
+                    checkpoint.sourceInstallationID = InstallationIdentity.current
+                }
             } else {
                 context.insert(NoteRevision(noteID: note.id, draft: draft, id: checkpointID))
             }
@@ -132,14 +135,19 @@ final class NoteStore {
         TreeTopology.descendants(of: id, nodes: notes.map { TreeNode(id: $0.id, parentID: $0.parentNoteID) })
     }
 
-    func move(_ note: InspirationNote, folderID: UUID?, parentID: UUID?, notes: [InspirationNote]) {
+    @discardableResult
+    func move(_ note: InspirationNote, folderID: UUID?, parentID: UUID?, notes: [InspirationNote]) -> Bool {
         let branch = Self.descendants(of: note.id, notes: notes)
         if let parentID {
             guard !branch.contains(parentID),
                   notes.contains(where: { $0.id == parentID && !$0.isDeleted && $0.folderID == folderID }) else {
                 errorMessage = "자기 자신이나 하위 가지로 이동할 수 없습니다."
-                return
+                return false
             }
+        }
+        guard note.folderID != folderID || note.parentNoteID != parentID else {
+            errorMessage = nil
+            return true
         }
         let placements = notes.filter { branch.contains($0.id) }.map {
             NotePlacement(note: $0, folderID: $0.folderID, parentNoteID: $0.parentNoteID,
@@ -158,7 +166,8 @@ final class NoteStore {
         if let parentID { notes.first { $0.id == parentID }?.isCollapsed = false }
         touchFolder(oldFolder)
         touchFolder(folderID)
-        if save() {
+        let saved = save()
+        if saved {
             offerUndo("가지를 이동했습니다") { [weak self] in
                 for placement in placements {
                     placement.note.folderID = placement.folderID
@@ -173,6 +182,7 @@ final class NoteStore {
                 self?.touchFolder(folderID)
             }
         }
+        return saved
     }
 
     func reorder(_ note: InspirationNote, offset: Int, notes: [InspirationNote]) {

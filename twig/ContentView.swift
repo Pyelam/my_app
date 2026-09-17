@@ -31,6 +31,7 @@ struct WorkspaceView: View {
     @State private var showingExport = false
     @State private var exportDocument = MarkdownDocument(text: "")
     @State private var targetedDropSection: WorkspaceSection?
+    @State private var showingSyncStatus = false
 
     init(context: ModelContext) {
         _store = State(initialValue: NoteStore(context: context))
@@ -92,6 +93,7 @@ struct WorkspaceView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingSyncStatus) { SyncStatusView() }
         .sheet(isPresented: Binding(get: { editingNoteID != nil }, set: { if !$0 { editingNoteID = nil } })) {
             NavigationStack {
                 if let note = notes.first(where: { $0.id == editingNoteID && !$0.isDeleted }) {
@@ -142,24 +144,21 @@ struct WorkspaceView: View {
                         InspirationBoardView(title: selectedFolder?.name ?? "수집함", folder: selectedFolder,
                             notes: boardNotes, revisions: revisions, selectedNoteID: selectedNoteID, store: store,
                             select: openNote, edit: editNote,
-                            editFolder: { editingFolder = selectedFolder; showingFolderForm = true },
                             allFolders: folders, allNotes: notes)
                     } else {
                         NoteBrowserView(section: section ?? .home, folders: folders, notes: notes, revisions: revisions,
                                         store: store, selectedNoteID: $selectedNoteID, openNote: openNote)
                     }
                     if let note = selectedNote {
-                        Divider()
-                        SelectedNotePanel(
+                        ResizableSelectedNotePanel(
                             note: note,
                             folders: activeFolders,
                             notes: notes,
                             revisions: revisions,
                             store: store,
+                            totalHeight: geometry.size.height,
                             edit: { editNote(note) }
                         )
-                            .id(note.id)
-                            .frame(height: min(320, max(140, geometry.size.height * 0.37)))
                     }
                 }
             }
@@ -265,7 +264,10 @@ struct WorkspaceView: View {
                     exportDocument = MarkdownDocument(text: MarkdownDocument.export(folders: folders, notes: notes, revisions: revisions))
                     showingExport = true
                 }
-                Text(StorageConfiguration.status).font(.caption).foregroundStyle(.secondary)
+                Button { showingSyncStatus = true } label: {
+                    Label(StorageConfiguration.status, systemImage: "icloud")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .navigationTitle("Twig")
@@ -289,8 +291,7 @@ struct WorkspaceView: View {
     private func moveDroppedNote(_ items: [String], folderID: UUID?, destination: WorkspaceSection) -> Bool {
         guard let id = items.compactMap(NoteDragPayload.decode).first,
               let note = notes.first(where: { $0.id == id && !$0.isDeleted }) else { return false }
-        store.move(note, folderID: folderID, parentID: nil, notes: notes)
-        guard store.errorMessage == nil else { return false }
+        guard store.move(note, folderID: folderID, parentID: nil, notes: notes) else { return false }
         targetedDropSection = nil
         selectedNoteID = note.id
         if section != destination {

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct InspirationBoardView: View {
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var cardWidth: CGFloat = 176
     @ScaledMetric(relativeTo: .body) private var cardHeight: CGFloat = 64
     let title: String
@@ -13,13 +12,16 @@ struct InspirationBoardView: View {
     let store: NoteStore
     let select: (InspirationNote) -> Void
     let edit: (InspirationNote) -> Void
-    let editFolder: () -> Void
     @State private var movingNote: InspirationNote?
     @State private var deletingNote: InspirationNote?
     @State private var isOrganizing = false
     @State private var draggedNoteID: UUID?
     @State private var targetedNoteID: UUID?
+    @State private var invalidTargetedNoteID: UUID?
     @State private var isRootTargeted = false
+    @State private var boardScrollPosition = ScrollPosition()
+    @State private var boardContentOffset: CGPoint = .zero
+    @State private var boardPanStartOffset: CGPoint?
     let allFolders: [InspirationFolder]
     let allNotes: [InspirationNote]
 
@@ -46,6 +48,16 @@ struct InspirationBoardView: View {
             }
         }
         .background(BoardStyle.paper(scheme))
+        .task(id: targetedNoteID) {
+            guard let targetedNoteID,
+                  let target = allNotes.first(where: { $0.id == targetedNoteID }),
+                  target.isCollapsed,
+                  parents.contains(target.id) else { return }
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled, self.targetedNoteID == targetedNoteID else { return }
+            target.isCollapsed = false
+            store.save()
+        }
         .sheet(item: $movingNote) { note in
             MoveNoteView(note: note, folders: allFolders, notes: allNotes, revisions: revisions, store: store)
         }
@@ -74,6 +86,8 @@ struct InspirationBoardView: View {
                     isOrganizing = false
                     draggedNoteID = nil
                     targetedNoteID = nil
+                    invalidTargetedNoteID = nil
+                    isRootTargeted = false
                 }
                 .font(.caption).buttonStyle(.borderedProminent)
             }
@@ -86,12 +100,11 @@ struct InspirationBoardView: View {
                 .font(.caption).buttonStyle(.bordered).tint(.secondary)
                 .accessibilityHint("이 폴더의 모든 가지에 적용합니다")
             }
-            Menu {
-                Button("최상위 영감 추가", systemImage: "plus") { addRoot() }
-                if folder != nil { Button("폴더 이름 및 테마", systemImage: "pencil") { editFolder() } }
-            } label: {
-                Image(systemName: "ellipsis").frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("폴더 작업")
+            Button("최상위 영감 추가", systemImage: "plus") { addRoot() }
+                .labelStyle(.iconOnly)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .buttonStyle(.plain)
         }.padding(.horizontal, 24).padding(.top, 22).padding(.bottom, 4)
     }
 
@@ -105,42 +118,67 @@ struct InspirationBoardView: View {
                         .padding(.horizontal, 24)
                         .padding(.top, 8)
                 }
-                ScrollViewReader { proxy in
+                GeometryReader { canvasGeometry in
                     ScrollView([.horizontal, .vertical]) {
                         ZStack(alignment: .topLeading) {
-                        Canvas { context, _ in
-                            var path = Path()
-                            for edge in layout.connections {
-                                path.move(to: CGPoint(x: edge.startX, y: edge.startY))
-                                path.addLine(to: CGPoint(x: edge.startX, y: edge.endY))
-                                path.addLine(to: CGPoint(x: edge.endX, y: edge.endY))
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .gesture(backgroundPanGesture)
+                                .accessibilityLabel("보드 배경")
+                                .accessibilityHint("밀거나 스크롤해서 큰 가지 보드를 이동합니다")
+                            Canvas { context, _ in
+                                var path = Path()
+                                for edge in layout.connections {
+                                    path.move(to: CGPoint(x: edge.startX, y: edge.startY))
+                                    path.addLine(to: CGPoint(x: edge.startX, y: edge.endY))
+                                    path.addLine(to: CGPoint(x: edge.endX, y: edge.endY))
+                                }
+                                context.stroke(path, with: .color(BoardStyle.rule(scheme)), lineWidth: 1)
+                            }.allowsHitTesting(false).accessibilityHidden(true)
+                            ForEach(layout.cards) { frame in
+                                if let note = index[frame.id] {
+                                    card(note, depth: frame.depth)
+                                        .frame(width: cardWidth + 44, height: cardHeight)
+                                        .id(note.id)
+                                        .position(x: CGFloat(frame.x) + (cardWidth + 44) / 2,
+                                                  y: CGFloat(frame.y) + cardHeight / 2)
+                                }
                             }
-                            context.stroke(path, with: .color(BoardStyle.rule(scheme)), lineWidth: 1)
-                        }.allowsHitTesting(false).accessibilityHidden(true)
-                        ForEach(layout.cards) { frame in
-                            if let note = index[frame.id] {
-                                card(note, depth: frame.depth)
-                                    .frame(width: cardWidth + 44, height: cardHeight)
-                                    .id(note.id)
-                                    .position(x: CGFloat(frame.x) + (cardWidth + 44) / 2, y: CGFloat(frame.y) + cardHeight / 2)
-                            }
                         }
+                        .frame(
+                            width: max(canvasGeometry.size.width, CGFloat(layout.width)),
+                            height: max(canvasGeometry.size.height, CGFloat(layout.height)),
+                            alignment: .topLeading
+                        )
                         }
-                        .frame(width: max(geometry.size.width, CGFloat(layout.width)),
-                               height: max(geometry.size.height, CGFloat(layout.height)), alignment: .topLeading)
-                        .contentShape(Rectangle())
-                        .dropDestination(for: String.self) { items, _ in
-                            moveToRoot(items)
-                        } isTargeted: { targeted in
-                            isRootTargeted = targeted
+                        .scrollPosition($boardScrollPosition)
+                        .scrollIndicators(.never)
+                        .scrollBounceBehavior(.basedOnSize, axes: [.horizontal, .vertical])
+                        .onScrollGeometryChange(for: CGPoint.self) { geometry in
+                            geometry.contentOffset
+                        } action: { _, offset in
+                            boardContentOffset = offset
                         }
-                    }
-                    .onChange(of: selectedNoteID) { _, id in
-                        if let id { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { proxy.scrollTo(id) } }
-                    }
                 }
             }
         }
+    }
+
+    private var backgroundPanGesture: some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { value in
+                let start = boardPanStartOffset ?? boardContentOffset
+                if boardPanStartOffset == nil { boardPanStartOffset = start }
+                boardScrollPosition.scrollTo(
+                    point: CGPoint(
+                        x: start.x - value.translation.width,
+                        y: start.y - value.translation.height
+                    )
+                )
+            }
+            .onEnded { _ in
+                boardPanStartOffset = nil
+            }
     }
 
     private func card(_ note: InspirationNote, depth: Int) -> some View {
@@ -189,10 +227,14 @@ struct InspirationBoardView: View {
                 if targetedNoteID == note.id {
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(.green, lineWidth: 3)
-                        .padding(.trailing, 44)
+                        .allowsHitTesting(false)
+                } else if invalidTargetedNoteID == note.id {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(BoardStyle.ink(scheme).opacity(0.78), lineWidth: 3)
                         .allowsHitTesting(false)
                 }
             }
+            .opacity(draggedNoteID == note.id && isOrganizing ? 0.45 : 1)
             .contentShape(.dragPreview, RoundedRectangle(cornerRadius: 12))
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.35).onEnded { _ in
                 isOrganizing = true
@@ -206,9 +248,17 @@ struct InspirationBoardView: View {
                 move(items, below: note)
             } isTargeted: { targeted in
                 if targeted {
-                    if canDropDraggedNote(below: note) { targetedNoteID = note.id }
+                    if canDropDraggedNote(below: note) {
+                        targetedNoteID = note.id
+                        invalidTargetedNoteID = nil
+                    } else {
+                        targetedNoteID = nil
+                        invalidTargetedNoteID = note.id
+                    }
                 } else if targetedNoteID == note.id {
                     targetedNoteID = nil
+                } else if invalidTargetedNoteID == note.id {
+                    invalidTargetedNoteID = nil
                 }
             }
             Button { addChild(to: note) } label: {
@@ -268,16 +318,14 @@ struct InspirationBoardView: View {
     private func move(_ items: [String], below target: InspirationNote) -> Bool {
         guard let note = draggedNote(from: items), note.id != target.id,
               !NoteStore.descendants(of: note.id, notes: allNotes).contains(target.id) else { return false }
-        store.move(note, folderID: target.folderID, parentID: target.id, notes: allNotes)
-        guard store.errorMessage == nil else { return false }
+        guard store.move(note, folderID: target.folderID, parentID: target.id, notes: allNotes) else { return false }
         finishDrop(note)
         return true
     }
 
     private func moveToRoot(_ items: [String]) -> Bool {
         guard let note = draggedNote(from: items) else { return false }
-        store.move(note, folderID: folder?.id, parentID: nil, notes: allNotes)
-        guard store.errorMessage == nil else { return false }
+        guard store.move(note, folderID: folder?.id, parentID: nil, notes: allNotes) else { return false }
         finishDrop(note)
         return true
     }
@@ -291,6 +339,7 @@ struct InspirationBoardView: View {
         select(note)
         draggedNoteID = nil
         targetedNoteID = nil
+        invalidTargetedNoteID = nil
         isRootTargeted = false
     }
 

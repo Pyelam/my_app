@@ -201,6 +201,10 @@ struct RevisionHistoryView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(revision.createdAt.formatted(date: .abbreviated, time: .standard)).font(.caption)
                             Text(revision.title.isEmpty ? String(revision.content.prefix(120)) : revision.title).lineLimit(3)
+                            Text(revision.sourceInstallationID.isEmpty
+                                 ? "기존 편집 기록"
+                                 : (revision.sourceInstallationID == InstallationIdentity.current ? "이 기기" : "다른 기기"))
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                 }
