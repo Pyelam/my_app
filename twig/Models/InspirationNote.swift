@@ -69,3 +69,16 @@ struct NoteDraft: Equatable {
             .map { String($0).lowercased() })).sorted()
     }
 }
+
+enum NoteDragPayload {
+    private static let prefix = "twig-note:"
+
+    static func encode(_ id: UUID) -> String {
+        prefix + id.uuidString
+    }
+
+    static func decode(_ value: String) -> UUID? {
+        guard value.hasPrefix(prefix) else { return nil }
+        return UUID(uuidString: String(value.dropFirst(prefix.count)))
+    }
+}

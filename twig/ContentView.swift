@@ -30,6 +30,7 @@ struct WorkspaceView: View {
     @State private var showingQuickCapture = false
     @State private var showingExport = false
     @State private var exportDocument = MarkdownDocument(text: "")
+    @State private var targetedDropSection: WorkspaceSection?
 
     init(context: ModelContext) {
         _store = State(initialValue: NoteStore(context: context))
@@ -149,8 +150,14 @@ struct WorkspaceView: View {
                     }
                     if let note = selectedNote {
                         Divider()
-                        SelectedNotePanel(note: note, notes: notes, revisions: revisions, store: store,
-                                          edit: { editNote(note) }, select: openNote)
+                        SelectedNotePanel(
+                            note: note,
+                            folders: activeFolders,
+                            notes: notes,
+                            revisions: revisions,
+                            store: store,
+                            edit: { editNote(note) }
+                        )
                             .id(note.id)
                             .frame(height: min(320, max(140, geometry.size.height * 0.37)))
                     }
@@ -158,6 +165,24 @@ struct WorkspaceView: View {
             }
         }
         .background(BoardStyle.paper(scheme))
+        .safeAreaInset(edge: .bottom) {
+            if let message = store.undoMessage {
+                HStack(spacing: 12) {
+                    Text(message).font(.callout).lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button("실행 취소") { store.undoLastAction() }
+                        .font(.callout.weight(.semibold))
+                    Button("닫기", systemImage: "xmark") { store.dismissUndo() }
+                        .labelStyle(.iconOnly)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            }
+        }
         .navigationTitle("Twig")
         .toolbar {
             ToolbarItem {
@@ -186,6 +211,12 @@ struct WorkspaceView: View {
                 NavigationLink(value: WorkspaceSection.inbox) {
                     Label("수집함 · \(notes.filter { !$0.isDeleted && $0.folderID == nil }.count)", systemImage: "tray")
                 }
+                .dropDestination(for: String.self) { items, _ in
+                    moveDroppedNote(items, folderID: nil, destination: .inbox)
+                } isTargeted: { targeted in
+                    targetedDropSection = targeted ? .inbox : (targetedDropSection == .inbox ? nil : targetedDropSection)
+                }
+                .listRowBackground(targetedDropSection == .inbox ? Color.green.opacity(0.18) : Color.clear)
                 NavigationLink(value: WorkspaceSection.all) { Label("전체 메모 검색", systemImage: "magnifyingglass") }
             }
             Section("영감 폴더") {
@@ -197,7 +228,15 @@ struct WorkspaceView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 3)
                     }
-                    .listRowBackground((FolderTheme(rawValue: folder.theme) ?? .default).color.opacity(0.07))
+                    .dropDestination(for: String.self) { items, _ in
+                        moveDroppedNote(items, folderID: folder.id, destination: .folder(folder.id))
+                    } isTargeted: { targeted in
+                        let destination = WorkspaceSection.folder(folder.id)
+                        targetedDropSection = targeted ? destination : (targetedDropSection == destination ? nil : targetedDropSection)
+                    }
+                    .listRowBackground(targetedDropSection == .folder(folder.id)
+                        ? Color.green.opacity(0.18)
+                        : (FolderTheme(rawValue: folder.theme) ?? .default).color.opacity(0.07))
                     .contextMenu {
                         Button("이름 및 테마 수정", systemImage: "pencil") { editingFolder = folder; showingFolderForm = true }
                         Button("휴지통으로 이동", systemImage: "trash", role: .destructive) { deletingFolder = folder }
@@ -245,6 +284,20 @@ struct WorkspaceView: View {
         if expanded { store.save() }
         selectedNoteID = note.id
         preferredColumn = .detail
+    }
+
+    private func moveDroppedNote(_ items: [String], folderID: UUID?, destination: WorkspaceSection) -> Bool {
+        guard let id = items.compactMap(NoteDragPayload.decode).first,
+              let note = notes.first(where: { $0.id == id && !$0.isDeleted }) else { return false }
+        store.move(note, folderID: folderID, parentID: nil, notes: notes)
+        guard store.errorMessage == nil else { return false }
+        targetedDropSection = nil
+        selectedNoteID = note.id
+        if section != destination {
+            pendingCaptureID = note.id
+            section = destination
+        }
+        return true
     }
 }
 

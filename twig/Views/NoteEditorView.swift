@@ -136,10 +136,23 @@ struct NoteEditorView: View {
         }
         .sheet(isPresented: $showingHistory) {
             RevisionHistoryView(revisions: revisions.filter { $0.noteID == note.id }) { revision in
+                let previousDraft = draft
+                let restoredDraft = NoteDraft(
+                    title: revision.title,
+                    content: revision.content,
+                    tags: revision.tagNames,
+                    customDate: revision.customDate
+                )
                 checkpointID = UUID()
                 checkpointStarted = Date()
-                draft = NoteDraft(title: revision.title, content: revision.content, tags: revision.tagNames, customDate: revision.customDate)
-                tagText = draft.tags.joined(separator: " ")
+                if store.commit(restoredDraft, to: note, checkpointID: checkpointID) {
+                    lastSaved = restoredDraft
+                    draft = restoredDraft
+                    tagText = restoredDraft.tags.joined(separator: " ")
+                    store.offerRevisionRestoreUndo(previousDraft, for: note)
+                } else {
+                    saveFailed = true
+                }
             }
         }
         .confirmationDialog("메모와 하위 가지를 휴지통으로 이동할까요?", isPresented: $showingDelete, titleVisibility: .visible) {

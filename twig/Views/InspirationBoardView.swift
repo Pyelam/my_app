@@ -16,6 +16,10 @@ struct InspirationBoardView: View {
     let editFolder: () -> Void
     @State private var movingNote: InspirationNote?
     @State private var deletingNote: InspirationNote?
+    @State private var isOrganizing = false
+    @State private var draggedNoteID: UUID?
+    @State private var targetedNoteID: UUID?
+    @State private var isRootTargeted = false
     let allFolders: [InspirationFolder]
     let allNotes: [InspirationNote]
 
@@ -63,6 +67,16 @@ struct InspirationBoardView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            if isOrganizing {
+                Label("가지 이동", systemImage: "hand.draw")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("완료") {
+                    isOrganizing = false
+                    draggedNoteID = nil
+                    targetedNoteID = nil
+                }
+                .font(.caption).buttonStyle(.borderedProminent)
+            }
             if !parents.isEmpty {
                 Button(hasExpandedBranches ? "가지 접기" : "가지 펼치기") {
                     let collapse = hasExpandedBranches
@@ -85,9 +99,15 @@ struct InspirationBoardView: View {
         let layout = layout
         let index = Dictionary(ordered.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView([.horizontal, .vertical]) {
-                    ZStack(alignment: .topLeading) {
+            VStack(spacing: 8) {
+                if isOrganizing {
+                    rootDropZone
+                        .padding(.horizontal, 24)
+                        .padding(.top, 8)
+                }
+                ScrollViewReader { proxy in
+                    ScrollView([.horizontal, .vertical]) {
+                        ZStack(alignment: .topLeading) {
                         Canvas { context, _ in
                             var path = Path()
                             for edge in layout.connections {
@@ -105,11 +125,19 @@ struct InspirationBoardView: View {
                                     .position(x: CGFloat(frame.x) + (cardWidth + 44) / 2, y: CGFloat(frame.y) + cardHeight / 2)
                             }
                         }
+                        }
+                        .frame(width: max(geometry.size.width, CGFloat(layout.width)),
+                               height: max(geometry.size.height, CGFloat(layout.height)), alignment: .topLeading)
+                        .contentShape(Rectangle())
+                        .dropDestination(for: String.self) { items, _ in
+                            moveToRoot(items)
+                        } isTargeted: { targeted in
+                            isRootTargeted = targeted
+                        }
                     }
-                    .frame(width: max(geometry.size.width, CGFloat(layout.width)), height: max(geometry.size.height, CGFloat(layout.height)), alignment: .topLeading)
-                }
-                .onChange(of: selectedNoteID) { _, id in
-                    if let id { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { proxy.scrollTo(id) } }
+                    .onChange(of: selectedNoteID) { _, id in
+                        if let id { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { proxy.scrollTo(id) } }
+                    }
                 }
             }
         }
@@ -157,13 +185,31 @@ struct InspirationBoardView: View {
                         .accessibilityLabel(note.isCollapsed ? "하위 가지 펼치기" : "하위 가지 접기")
                 }
             }
-            .contextMenu {
-                Button("메모 편집", systemImage: "pencil") { edit(note) }
-                Button("가지 만들기", systemImage: "plus") { addChild(to: note) }
-                Button("위로 이동", systemImage: "arrow.up") { store.reorder(note, offset: -1, notes: allNotes) }
-                Button("아래로 이동", systemImage: "arrow.down") { store.reorder(note, offset: 1, notes: allNotes) }
-                Button("폴더 또는 부모 변경", systemImage: "arrow.turn.up.right") { movingNote = note }
-                Button("휴지통으로 이동", systemImage: "trash", role: .destructive) { deletingNote = note }
+            .overlay {
+                if targetedNoteID == note.id {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.green, lineWidth: 3)
+                        .padding(.trailing, 44)
+                        .allowsHitTesting(false)
+                }
+            }
+            .contentShape(.dragPreview, RoundedRectangle(cornerRadius: 12))
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.35).onEnded { _ in
+                isOrganizing = true
+                draggedNoteID = note.id
+                select(note)
+            })
+            .draggable(NoteDragPayload.encode(note.id)) {
+                dragPreview(note, draft: draft)
+            }
+            .dropDestination(for: String.self) { items, _ in
+                move(items, below: note)
+            } isTargeted: { targeted in
+                if targeted {
+                    if canDropDraggedNote(below: note) { targetedNoteID = note.id }
+                } else if targetedNoteID == note.id {
+                    targetedNoteID = nil
+                }
             }
             Button { addChild(to: note) } label: {
                 Image(systemName: "plus").font(.system(size: 11, weight: .regular))
@@ -173,6 +219,79 @@ struct InspirationBoardView: View {
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("\(draft.label)에 가지 추가")
         }
+    }
+
+    private var rootDropZone: some View {
+        Label("이 폴더의 최상위로 이동", systemImage: "arrow.up.to.line")
+            .font(.callout.weight(.medium))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(isRootTargeted ? Color.green.opacity(0.18) : BoardStyle.wash(scheme),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isRootTargeted ? Color.green : BoardStyle.rule(scheme), lineWidth: isRootTargeted ? 2 : 1))
+            .dropDestination(for: String.self) { items, _ in
+                moveToRoot(items)
+            } isTargeted: { targeted in
+                isRootTargeted = targeted
+            }
+    }
+
+    private func dragPreview(_ note: InspirationNote, draft: NoteDraft) -> some View {
+        let childCount = NoteStore.descendants(of: note.id, notes: allNotes).count - 1
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "doc.text").font(.title3)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(draft.label).font(.callout.weight(.semibold)).lineLimit(2)
+                if !draft.content.isEmpty {
+                    Text(draft.content).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                if childCount > 0 {
+                    Text("하위 가지 \(childCount)개 포함").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: cardWidth + 44, alignment: .leading)
+        .background(BoardStyle.paper(scheme), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(BoardStyle.rule(scheme)))
+        .shadow(color: .black.opacity(0.16), radius: 12, y: 6)
+        .opacity(0.82)
+        .scaleEffect(0.96)
+    }
+
+    private func canDropDraggedNote(below target: InspirationNote) -> Bool {
+        guard let draggedNoteID, draggedNoteID != target.id else { return false }
+        return !NoteStore.descendants(of: draggedNoteID, notes: allNotes).contains(target.id)
+    }
+
+    private func move(_ items: [String], below target: InspirationNote) -> Bool {
+        guard let note = draggedNote(from: items), note.id != target.id,
+              !NoteStore.descendants(of: note.id, notes: allNotes).contains(target.id) else { return false }
+        store.move(note, folderID: target.folderID, parentID: target.id, notes: allNotes)
+        guard store.errorMessage == nil else { return false }
+        finishDrop(note)
+        return true
+    }
+
+    private func moveToRoot(_ items: [String]) -> Bool {
+        guard let note = draggedNote(from: items) else { return false }
+        store.move(note, folderID: folder?.id, parentID: nil, notes: allNotes)
+        guard store.errorMessage == nil else { return false }
+        finishDrop(note)
+        return true
+    }
+
+    private func draggedNote(from items: [String]) -> InspirationNote? {
+        guard let id = items.compactMap(NoteDragPayload.decode).first else { return nil }
+        return allNotes.first { $0.id == id && !$0.isDeleted }
+    }
+
+    private func finishDrop(_ note: InspirationNote) {
+        select(note)
+        draggedNoteID = nil
+        targetedNoteID = nil
+        isRootTargeted = false
     }
 
     private func addRoot() {

@@ -3,15 +3,12 @@ import SwiftUI
 struct SelectedNotePanel: View {
     @Environment(\.colorScheme) private var scheme
     let note: InspirationNote
+    let folders: [InspirationFolder]
     let notes: [InspirationNote]
     let revisions: [NoteRevision]
     let store: NoteStore
     let edit: () -> Void
-    let select: (InspirationNote) -> Void
-    @State private var nextThought = ""
-    @State private var pendingChild: InspirationNote?
-    @State private var childCheckpointID = UUID()
-    @State private var saveFailed = false
+    @State private var showingMove = false
 
     private var draft: NoteDraft { store.pendingDrafts[note.id] ?? NoteStore.draft(for: note, revisions: revisions) }
 
@@ -26,8 +23,11 @@ struct SelectedNotePanel: View {
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
-                    Button("편집", systemImage: "pencil", action: edit)
-                        .font(.caption).buttonStyle(.bordered).tint(.secondary)
+                    HStack {
+                        Button("이동", systemImage: "arrow.turn.up.right") { showingMove = true }
+                        Button("편집", systemImage: "pencil", action: edit)
+                    }
+                    .font(.caption).buttonStyle(.bordered).tint(.secondary)
                 }
                 if !draft.content.isEmpty {
                     Text(draft.content).font(.callout).foregroundStyle(.secondary)
@@ -48,48 +48,12 @@ struct SelectedNotePanel: View {
                         }
                     }
                 }
-                Divider().padding(.top, 2)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("다음 가지").font(.caption.weight(.medium))
-                    HStack {
-                        TextField("이 생각에서 이어지는 다음 행동은?", text: $nextThought, axis: .vertical)
-                            .textFieldStyle(.plain).font(.callout).lineLimit(1...3)
-                            .accessibilityLabel("하위 가지 내용")
-                        Button(action: addNextThought) {
-                            Image(systemName: "arrow.down").font(.body)
-                                .frame(width: 32, height: 32)
-                                .background(BoardStyle.paper(scheme), in: Circle())
-                                .overlay(Circle().strokeBorder(BoardStyle.rule(scheme), lineWidth: 1))
-                                .shadow(color: .black.opacity(0.06), radius: 3, y: 2)
-                                .frame(width: 44, height: 44).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                            .disabled(nextThought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            .accessibilityLabel("하위 가지로 추가")
-                    }
-                    if saveFailed {
-                        Text("저장하지 못했습니다. 아래 화살표를 눌러 다시 시도해 주세요.")
-                            .font(.caption).foregroundStyle(.red)
-                    }
-                }
+
             }.padding(24)
         }
         .background(BoardStyle.paper(scheme))
-        .onChange(of: nextThought) { _, _ in persistNextThought() }
-    }
-
-    private func persistNextThought() {
-        guard pendingChild != nil || !nextThought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let child = pendingChild ?? store.createNote(folderID: note.folderID, parentID: note.id, notes: notes)
-        pendingChild = child
-        saveFailed = !store.commit(NoteDraft(content: nextThought), to: child, checkpointID: childCheckpointID)
-    }
-
-    private func addNextThought() {
-        persistNextThought()
-        guard !saveFailed, let child = pendingChild else { return }
-        pendingChild = nil
-        childCheckpointID = UUID()
-        nextThought = ""
-        select(child)
+        .sheet(isPresented: $showingMove) {
+            MoveNoteView(note: note, folders: folders, notes: notes, revisions: revisions, store: store)
+        }
     }
 }

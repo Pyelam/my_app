@@ -8,9 +8,36 @@ final class NoteStore {
     let context: ModelContext
     var errorMessage: String?
     private(set) var pendingDrafts: [UUID: NoteDraft] = [:]
+    private(set) var undoMessage: String?
     private var pendingCheckpoints: [UUID: UUID] = [:]
+    @ObservationIgnored private var undoOperation: (() -> Void)?
 
     init(context: ModelContext) { self.context = context }
+
+    func undoLastAction() {
+        guard let undoOperation else { return }
+        self.undoOperation = nil
+        undoMessage = nil
+        undoOperation()
+        save()
+    }
+
+    func dismissUndo() {
+        undoMessage = nil
+        undoOperation = nil
+    }
+
+    func offerRevisionRestoreUndo(_ previousDraft: NoteDraft, for note: InspirationNote) {
+        offerUndo("편집 기록을 복구했습니다") { [weak self] in
+            guard let self else { return }
+            _ = self.commit(previousDraft, to: note)
+        }
+    }
+
+    private func offerUndo(_ message: String, operation: @escaping () -> Void) {
+        undoMessage = message
+        undoOperation = operation
+    }
 
     @discardableResult
     func save() -> Bool {
@@ -114,6 +141,12 @@ final class NoteStore {
                 return
             }
         }
+        let placements = notes.filter { branch.contains($0.id) }.map {
+            NotePlacement(note: $0, folderID: $0.folderID, parentNoteID: $0.parentNoteID,
+                          sortOrder: $0.sortOrder, updatedAt: $0.updatedAt)
+        }
+        let expandedParent = parentID.flatMap { id in notes.first { $0.id == id } }
+        let parentWasCollapsed = expandedParent?.isCollapsed
         let oldFolder = note.folderID
         note.parentNoteID = parentID
         note.sortOrder = (notes.filter { !$0.isDeleted && $0.folderID == folderID && $0.parentNoteID == parentID }
@@ -125,7 +158,21 @@ final class NoteStore {
         if let parentID { notes.first { $0.id == parentID }?.isCollapsed = false }
         touchFolder(oldFolder)
         touchFolder(folderID)
-        save()
+        if save() {
+            offerUndo("가지를 이동했습니다") { [weak self] in
+                for placement in placements {
+                    placement.note.folderID = placement.folderID
+                    placement.note.parentNoteID = placement.parentNoteID
+                    placement.note.sortOrder = placement.sortOrder
+                    placement.note.updatedAt = placement.updatedAt
+                }
+                if let expandedParent, let parentWasCollapsed {
+                    expandedParent.isCollapsed = parentWasCollapsed
+                }
+                self?.touchFolder(oldFolder)
+                self?.touchFolder(folderID)
+            }
+        }
     }
 
     func reorder(_ note: InspirationNote, offset: Int, notes: [InspirationNote]) {
@@ -134,14 +181,24 @@ final class NoteStore {
         })
         guard let index = siblings.firstIndex(where: { $0.id == note.id }),
               siblings.indices.contains(index + offset) else { return }
+        let previousOrders = siblings.map { ($0, $0.sortOrder) }
         siblings.swapAt(index, index + offset)
         for (index, sibling) in siblings.enumerated() { sibling.sortOrder = index }
         touchFolder(note.folderID)
-        save()
+        if save() {
+            offerUndo("가지 순서를 변경했습니다") { [weak self] in
+                for (sibling, order) in previousOrders { sibling.sortOrder = order }
+                self?.touchFolder(note.folderID)
+            }
+        }
     }
 
     func trash(_ note: InspirationNote, notes: [InspirationNote]) {
         let branch = Self.descendants(of: note.id, notes: notes)
+        let previousStates = notes.filter { branch.contains($0.id) }.map {
+            NoteDeletion(note: $0, isDeleted: $0.isDeleted, deletedAt: $0.deletedAt,
+                         deletionBatchID: $0.deletionBatchID)
+        }
         let batch = UUID()
         let now = Date()
         for member in notes where branch.contains(member.id) && !member.isDeleted {
@@ -150,10 +207,25 @@ final class NoteStore {
             member.deletionBatchID = batch
         }
         touchFolder(note.folderID)
-        save()
+        if save() {
+            offerUndo("가지와 하위 가지를 휴지통으로 이동했습니다") { [weak self] in
+                for state in previousStates {
+                    state.note.isDeleted = state.isDeleted
+                    state.note.deletedAt = state.deletedAt
+                    state.note.deletionBatchID = state.deletionBatchID
+                }
+                self?.touchFolder(note.folderID)
+            }
+        }
     }
 
     func trashFolder(_ folder: InspirationFolder, notes: [InspirationNote]) {
+        let folderWasDeleted = folder.isDeleted
+        let folderDeletedAt = folder.deletedAt
+        let previousStates = notes.filter { $0.folderID == folder.id }.map {
+            NoteDeletion(note: $0, isDeleted: $0.isDeleted, deletedAt: $0.deletedAt,
+                         deletionBatchID: $0.deletionBatchID)
+        }
         folder.isDeleted = true
         folder.deletedAt = Date()
         for note in notes where note.folderID == folder.id && !note.isDeleted {
@@ -161,7 +233,17 @@ final class NoteStore {
             note.deletedAt = folder.deletedAt
             note.deletionBatchID = folder.id
         }
-        save()
+        if save() {
+            offerUndo("폴더와 메모를 휴지통으로 이동했습니다") {
+                folder.isDeleted = folderWasDeleted
+                folder.deletedAt = folderDeletedAt
+                for state in previousStates {
+                    state.note.isDeleted = state.isDeleted
+                    state.note.deletedAt = state.deletedAt
+                    state.note.deletionBatchID = state.deletionBatchID
+                }
+            }
+        }
     }
 
     func restore(_ note: InspirationNote, notes: [InspirationNote], folders: [InspirationFolder]) {
@@ -200,4 +282,19 @@ final class NoteStore {
             return $0.id.uuidString < $1.id.uuidString
         }
     }
+}
+
+private struct NotePlacement {
+    let note: InspirationNote
+    let folderID: UUID?
+    let parentNoteID: UUID?
+    let sortOrder: Int
+    let updatedAt: Date
+}
+
+private struct NoteDeletion {
+    let note: InspirationNote
+    let isDeleted: Bool
+    let deletedAt: Date?
+    let deletionBatchID: UUID?
 }
